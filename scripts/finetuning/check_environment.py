@@ -28,6 +28,24 @@ REQUIRED_PACKAGES = (
     "tensorboard",
 )
 
+DATASET_PREFIXES = {
+    "base": "MedDG_extractor_15k",
+    "terminology": "MedDG_extractor_15k_terminology",
+}
+
+CONFIGS_BY_VARIANT = {
+    "base": (
+        "configs/finetuning/extractor_qwen3_4b_lora.yaml",
+        "configs/finetuning/extractor_qwen3_4b_predict.yaml",
+        "configs/finetuning/extractor_qwen3_0_6b_lora.yaml",
+        "configs/finetuning/extractor_qwen3_0_6b_predict.yaml",
+    ),
+    "terminology": (
+        "configs/finetuning/extractor_qwen3_4b_terminology_lora.yaml",
+        "configs/finetuning/extractor_qwen3_4b_terminology_predict.yaml",
+    ),
+}
+
 
 def check_cli(errors: list[str]) -> None:
     executable = shutil.which("llamafactory-cli")
@@ -114,7 +132,7 @@ def check_jsonl(path: Path, expected_rows: int, errors: list[str]) -> None:
         errors.append(f"{path.name} expected {expected_rows} rows, found {count}")
 
 
-def check_project(project_root: Path, errors: list[str]) -> None:
+def check_project(project_root: Path, dataset_variant: str, errors: list[str]) -> None:
     dataset_info = project_root / "data" / "dataset_info.json"
     if not dataset_info.exists():
         errors.append(f"missing dataset registry: {dataset_info}")
@@ -122,19 +140,15 @@ def check_project(project_root: Path, errors: list[str]) -> None:
         print(f"[ok] dataset registry: {dataset_info}")
 
     data_dir = project_root / "data" / "synthetic_extractor"
+    dataset_prefix = DATASET_PREFIXES[dataset_variant]
     for split, expected_rows in EXPECTED_ROWS.items():
         check_jsonl(
-            data_dir / f"MedDG_extractor_15k_{split}_alpaca.jsonl",
+            data_dir / f"{dataset_prefix}_{split}_alpaca.jsonl",
             expected_rows,
             errors,
         )
 
-    for relative_path in (
-        "configs/finetuning/extractor_qwen3_4b_lora.yaml",
-        "configs/finetuning/extractor_qwen3_4b_predict.yaml",
-        "configs/finetuning/extractor_qwen3_0_6b_lora.yaml",
-        "configs/finetuning/extractor_qwen3_0_6b_predict.yaml",
-    ):
+    for relative_path in CONFIGS_BY_VARIANT[dataset_variant]:
         path = project_root / relative_path
         if not path.exists():
             errors.append(f"missing config: {path}")
@@ -154,13 +168,19 @@ def main() -> None:
         action="store_true",
         help="Only validate project files and datasets; skip CUDA and installed-package checks.",
     )
+    parser.add_argument(
+        "--dataset-variant",
+        choices=sorted(DATASET_PREFIXES),
+        default="base",
+        help="Dataset variant to validate.",
+    )
     args = parser.parse_args()
 
     project_root = args.project_root.resolve()
     errors: list[str] = []
     print(f"AskMed root: {project_root}")
 
-    check_project(project_root, errors)
+    check_project(project_root, args.dataset_variant, errors)
     if not args.data_only:
         check_cli(errors)
         torch_module = check_packages(errors)

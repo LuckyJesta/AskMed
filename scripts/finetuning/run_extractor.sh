@@ -8,10 +8,30 @@ DATA_DIR="${PROJECT_ROOT}/data/synthetic_extractor"
 MODEL_ID="Qwen/Qwen3-4B-Instruct-2507"
 MODEL_DIR="${PROJECT_ROOT}/models/Qwen3-4B-Instruct-2507"
 OUTPUT_ROOT="${PROJECT_ROOT}/outputs/extractor_qwen3_4b"
-TRAIN_OUTPUT="${OUTPUT_ROOT}/train"
-TEST_OUTPUT="${OUTPUT_ROOT}/test"
-TRAIN_CONFIG="${CONFIG_DIR}/extractor_qwen3_4b_lora.yaml"
-PREDICT_CONFIG="${CONFIG_DIR}/extractor_qwen3_4b_predict.yaml"
+DATASET_VARIANT="${DATASET_VARIANT:-base}"
+
+case "${DATASET_VARIANT}" in
+  base)
+    TRAIN_OUTPUT="${OUTPUT_ROOT}/train"
+    TEST_OUTPUT="${OUTPUT_ROOT}/test"
+    TRAIN_CONFIG="${CONFIG_DIR}/extractor_qwen3_4b_lora.yaml"
+    PREDICT_CONFIG="${CONFIG_DIR}/extractor_qwen3_4b_predict.yaml"
+    TEST_DATASET="${DATA_DIR}/MedDG_extractor_15k_test_alpaca.jsonl"
+    METRICS_OUTPUT="${TEST_OUTPUT}/structured_metrics.json"
+    ;;
+  terminology)
+    TRAIN_OUTPUT="${OUTPUT_ROOT}/train_terminology"
+    TEST_OUTPUT="${OUTPUT_ROOT}/test_terminology"
+    TRAIN_CONFIG="${CONFIG_DIR}/extractor_qwen3_4b_terminology_lora.yaml"
+    PREDICT_CONFIG="${CONFIG_DIR}/extractor_qwen3_4b_terminology_predict.yaml"
+    TEST_DATASET="${DATA_DIR}/MedDG_extractor_15k_terminology_test_alpaca.jsonl"
+    METRICS_OUTPUT="${TEST_OUTPUT}/structured_metrics_standardized.json"
+    ;;
+  *)
+    echo "Unsupported DATASET_VARIANT=${DATASET_VARIANT}. Use 'base' or 'terminology'." >&2
+    exit 1
+    ;;
+esac
 
 export CUDA_VISIBLE_DEVICES="${CUDA_VISIBLE_DEVICES:-0}"
 export TOKENIZERS_PARALLELISM="${TOKENIZERS_PARALLELISM:-false}"
@@ -25,7 +45,7 @@ stage() {
 
 check_environment() {
   stage 1 "Environment and dataset checks"
-  python "${SCRIPT_DIR}/check_environment.py" --project-root "${PROJECT_ROOT}"
+  python "${SCRIPT_DIR}/check_environment.py" --project-root "${PROJECT_ROOT}" --dataset-variant "${DATASET_VARIANT}"
 }
 
 download_model() {
@@ -82,11 +102,19 @@ test_model() {
     "output_dir=${TEST_OUTPUT}" \
     2>&1 | tee "${OUTPUT_ROOT}/test.log"
 
-  python "${SCRIPT_DIR}/evaluate_predictions.py" \
-    --predictions "${TEST_OUTPUT}/generated_predictions.jsonl" \
-    --dataset "${DATA_DIR}/MedDG_extractor_15k_test_alpaca.jsonl" \
-    --output "${TEST_OUTPUT}/structured_metrics.json" \
-    2>&1 | tee "${OUTPUT_ROOT}/metrics.log"
+  local metrics_command=(
+    python "${SCRIPT_DIR}/evaluate_predictions.py"
+    --predictions "${TEST_OUTPUT}/generated_predictions.jsonl"
+    --dataset "${TEST_DATASET}"
+    --output "${METRICS_OUTPUT}"
+  )
+  if [[ "${DATASET_VARIANT}" == "terminology" ]]; then
+    metrics_command+=(
+      --terminology-db "${PROJECT_ROOT}/data/terminology/terminology.sqlite"
+      --standardized-predictions-output "${TEST_OUTPUT}/generated_predictions_standardized.jsonl"
+    )
+  fi
+  "${metrics_command[@]}" 2>&1 | tee "${OUTPUT_ROOT}/metrics.log"
 }
 
 usage() {
@@ -104,6 +132,7 @@ Environment variables:
   CUDA_VISIBLE_DEVICES       GPU index, default: 0
   RESUME_FROM_CHECKPOINT     Optional LLaMA-Factory checkpoint path
   PYTORCH_CUDA_ALLOC_CONF    Optional allocator settings supported by the installed PyTorch version
+  DATASET_VARIANT            Dataset variant: base or terminology, default: base
 EOF
 }
 
