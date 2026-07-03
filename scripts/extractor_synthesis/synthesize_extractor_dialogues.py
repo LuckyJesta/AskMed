@@ -19,6 +19,7 @@ from extractor_common import (
     append_jsonl,
     extract_json_object,
     format_context,
+    is_short_context_answer,
     is_pure_non_medical_chatter,
     nearest_previous_assistant,
     normalize_extraction,
@@ -143,26 +144,42 @@ def handled_exception_types(api_format: str) -> tuple[type[BaseException], ...]:
 
 
 def build_user_prompt(row: dict) -> str:
+    patient_utterance = str(row.get("patient_utterance") or "")
+    include_context = is_short_context_answer(patient_utterance)
+    if include_context:
+        auxiliary = (
+            "【辅助理解信息：只能用于理解短回答和绑定目标，不能直接作为事实或evidence】\n"
+            f"上一轮医生问题：{row.get('previous_doctor_question') or '无'}\n"
+            "当前问诊状态（只由当前轮之前的信息形成，不包含当前发言）：\n"
+            f"{json.dumps(row.get('patient_state_before_turn') or {}, ensure_ascii=False, separators=(',', ':'))}\n"
+            "最近对话上下文：省略，避免旧患者发言污染本轮evidence。\n"
+            "短回答特别规则：如果患者当前发言是“没有/没/无/不”等否定回答，被询问对象应为absent，evidence必须使用患者当前发言原文，不能复制医生问题。\n"
+        )
+    else:
+        auxiliary = (
+            "【辅助理解信息：不能直接作为事实或evidence】\n"
+            f"上一轮医生问题：{row.get('previous_doctor_question') or '无'}\n"
+            "当前患者发言不是短回答，本轮不要抽取问诊状态或最近上下文中的旧事实。\n"
+        )
     return (
         "请完成一次医学事实抽取。严格只输出JSON。\n\n"
-        "【抽取对象】\n"
-        f"患者当前发言：{row.get('patient_utterance') or ''}\n\n"
-        "【辅助理解信息：不能直接作为evidence】\n"
-        f"上一轮医生问题：{row.get('previous_doctor_question') or '无'}\n"
-        "当前问诊状态（只由当前轮之前的信息形成，不包含当前发言）：\n"
-        f"{json.dumps(row.get('patient_state_before_turn') or {}, ensure_ascii=False, separators=(',', ':'))}\n"
-        f"最近对话上下文：\n{format_context(row.get('recent_context') or [])}\n"
+        f"{auxiliary}"
         "MedDG弱标签（只供合成参考，可能不完整或有误）："
         f"{json.dumps(row.get('meddg_weak_labels') or {}, ensure_ascii=False, separators=(',', ':'))}\n\n"
+        "【唯一抽取对象】\n"
+        f"患者当前发言：{patient_utterance}\n\n"
         "【输出要求】\n"
         "1. 只抽取患者当前发言中明确存在或明确不存在的医学事实，status只能是present或absent，不要输出uncertain。\n"
         "2. 患者咨询、猜测、担忧、请求建议、诊断咨询、用药咨询、检查咨询不作为facts。\n"
         "3. 一句话同时包含明确事实和咨询时，只抽取明确事实部分。\n"
         "4. evidence必须来自患者当前发言的连续原文片段。\n"
-        "5. 如果当前发言只是寒暄、确认、感谢或告别且没有新医学信息，输出 {\"facts\":[]}。\n"
-        "6. 如果当前发言是短回答，结合上一轮医生问题和当前问诊状态判断目标；无法判断目标时输出 {\"facts\":[]}。\n"
-        "7. 如果当前发言中症状本体和属性同时出现，把属性合并进该症状fact，不要重复输出attribute fact。\n"
-        "8. 请只输出紧凑JSON，不要换行、缩进或多余空格。"
+        "5. 当前问诊状态和最近对话上下文中的既有事实不要重复输出，除非患者当前发言重新明确表达了该事实。\n"
+        "6. 输出前逐条自检：如果某个fact的evidence不是患者当前发言的连续子串，必须删除该fact。\n"
+        "7. 如果当前发言只是寒暄、确认、感谢或告别且没有新医学信息，输出 {\"facts\":[]}。\n"
+        "8. 如果当前发言是短回答，结合上一轮医生问题和当前问诊状态判断目标；无法判断目标时输出 {\"facts\":[]}。\n"
+        "9. 如果当前发言中症状本体和属性同时出现，把属性合并进该症状fact，不要重复输出attribute fact。\n"
+        "10. 再次确认：最终facts只能由【唯一抽取对象】中的患者当前发言支持，不能抽取辅助理解信息中的旧事实。\n"
+        "11. 请只输出紧凑JSON，不要换行、缩进或多余空格。"
     )
 
 
