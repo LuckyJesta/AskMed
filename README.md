@@ -1,312 +1,173 @@
 # AskMed
 
-AskMed 当前包含两个主要流程：
+AskMed 将预问诊系统分为两个模块：
 
-1. 从 MedDG 对话合成医学事实抽取器训练数据。
-2. 使用 Qwen3-4B-Instruct-2507 或 Qwen3-0.6B 对抽取器进行 LoRA 微调、验证和测试。
+1. `extractor`：从患者当前发言抽取医学事实、可选术语标准化并维护问诊状态。
+2. `interviewer`：读取结构化精简问诊状态，生成下一轮问题或结束问诊。
 
-项目中的路径都以 `AskMed/` 为根目录解析，可以整体复制到 Linux 服务器。
+所有路径均以项目根目录解析，服务器命令应在 `AskMed/` 下执行。
 
-## 微调环境
+## Project layout
 
-训练依赖 Conda 环境中的 LLaMA-Factory CLI：
+```text
+scripts/
+├─ extractor/
+│  ├─ pipeline/       # 校验、标准化、实体归并、状态管理
+│  ├─ synthesis/      # 教师数据合成、修复、校验、分割、Alpaca
+│  ├─ finetuning/     # Qwen3-4B LoRA 训练与测试
+│  ├─ inference/      # LLaMA-Factory API 推理客户端
+│  └─ terminology/    # ICD-10-CN / LOINC 导入
+└─ interviewer/
+   ├─ synthesis/
+   ├─ finetuning/
+   └─ inference/
+```
+
+## Environment
+
+补充依赖记录在 `environment.yml`。训练环境还需要可用的 PyTorch、CUDA、PEFT、Transformers 和 LLaMA-Factory：
 
 ```bash
+conda activate /disk/wzy/env/AskMed
 llamafactory-cli version
 ```
 
-目标环境版本为 `llamafactory 0.9.5.dev0`。`environment.yml` 记录 AskMed 直接使用的补充依赖；PyTorch、CUDA、Transformers、PEFT、TRL 和 LLaMA-Factory 应由服务器现有训练环境提供。
+## Current datasets
 
-默认硬件假设：
+`data/dataset_info.json` 注册 extractor v3.1 的 train/valid/test，以及由它派生的 interviewer v1 三个数据集。问诊器文件会在教师合成和 Alpaca 转换完成后生成。
 
-- Linux
-- 单张约 24GB NVIDIA GPU
-- CUDA 和 BF16 可用
+## Extractor synthesis
 
-## 数据
-
-LLaMA-Factory 数据注册文件：
-
-```text
-data/dataset_info.json
-```
-
-当前数据：
-
-```text
-data/synthetic_extractor/MedDG_extractor_15k_train_alpaca.jsonl
-data/synthetic_extractor/MedDG_extractor_15k_valid_alpaca.jsonl
-data/synthetic_extractor/MedDG_extractor_15k_test_alpaca.jsonl
-```
-
-对应样本数：
-
-```text
-train: 13508
-valid:   673
-test:    776
-```
-
-## 统一微调入口
-
-先激活服务器上的训练环境：
+默认不分割；传入 `--split-ratios` 才按完整对话切分：
 
 ```bash
-conda activate AskMed
-```
-
-检查环境与数据：
-
-```bash
-bash scripts/finetuning/run_extractor.sh check
-```
-
-通过 ModelScope 下载模型：
-
-```bash
-bash scripts/finetuning/run_extractor.sh download
-```
-
-训练并在验证集上评估：
-
-```bash
-bash scripts/finetuning/run_extractor.sh train
-```
-
-在测试集上生成预测并计算结构化指标：
-
-```bash
-bash scripts/finetuning/run_extractor.sh test
-```
-
-执行完整流程：
-
-```bash
-bash scripts/finetuning/run_extractor.sh all
-```
-
-## Qwen3-0.6B 低显存流程
-
-当 GPU 只剩约 10GB 可用显存时，可以先用 Qwen3-0.6B 跑通相同的训练、验证和测试流程。它使用独立的模型和输出目录，不会覆盖 4B 结果。
-
-环境与数据检查：
-
-```bash
-bash scripts/finetuning/run_extractor_0_6b.sh check
-```
-
-通过 ModelScope 下载到 `models/Qwen3-0.6B/`：
-
-```bash
-bash scripts/finetuning/run_extractor_0_6b.sh download
-```
-
-建议先进行 200 条、20 step 的 smoke test：
-
-```bash
-bash scripts/finetuning/run_extractor_0_6b.sh smoke
-```
-
-完整训练与验证：
-
-```bash
-bash scripts/finetuning/run_extractor_0_6b.sh train
-```
-
-测试与结构化评估：
-
-```bash
-bash scripts/finetuning/run_extractor_0_6b.sh test
-```
-
-完整流程：
-
-```bash
-bash scripts/finetuning/run_extractor_0_6b.sh all
-```
-
-0.6B 默认配置：
-
-```text
-template: qwen3_nothink
-LoRA rank: 16
-cutoff_len: 4096
-effective batch size: 16
-epochs: 3
-train_on_prompt: false
-packing: false
-```
-
-输出目录：
-
-```text
-outputs/extractor_qwen3_0_6b/smoke/
-outputs/extractor_qwen3_0_6b/train/
-outputs/extractor_qwen3_0_6b/test/
-```
-
-默认 GPU 是 `0`，可以覆盖：
-
-```bash
-CUDA_VISIBLE_DEVICES=1 bash scripts/finetuning/run_extractor.sh train
-```
-
-从 checkpoint 恢复：
-
-```bash
-RESUME_FROM_CHECKPOINT=outputs/extractor_qwen3_4b/train/checkpoint-1000 \
-  bash scripts/finetuning/run_extractor.sh train
-```
-
-## 模型与输出
-
-ModelScope 模型目录：
-
-```text
-models/Qwen3-4B-Instruct-2507/
-```
-
-训练输出：
-
-```text
-outputs/extractor_qwen3_4b/train/
-outputs/extractor_qwen3_4b/train.log
-```
-
-测试输出：
-
-```text
-outputs/extractor_qwen3_4b/test/generated_predictions.jsonl
-outputs/extractor_qwen3_4b/test/structured_metrics.json
-outputs/extractor_qwen3_4b/test.log
-outputs/extractor_qwen3_4b/metrics.log
-```
-
-训练和测试进度使用 LLaMA-Factory/Hugging Face 原生 tqdm。训练每 10 step 输出 loss、学习率、epoch 和累计 token 数。
-
-## 训练配置
-
-训练配置：
-
-```text
-configs/finetuning/extractor_qwen3_4b_lora.yaml
-```
-
-关键参数：
-
-```text
-model: Qwen3-4B-Instruct-2507
-template: qwen3_nothink
-LoRA rank: 16
-cutoff_len: 8192
-effective batch size: 16
-epochs: 3
-train_on_prompt: false
-packing: false
-```
-
-`train_on_prompt: false` 表示模型读取完整输入，但 loss 只计算目标 JSON。`packing: false` 表示不同患者样本不会拼接到同一个训练序列中。
-
-如果 24GB 显存出现 OOM：
-
-1. 服务器已安装 FlashAttention 2 时，将 `flash_attn` 改为 `fa2`。
-2. 否则将 `cutoff_len` 降为 `6144`。
-3. 最后再降为 `4096`。
-
-## 测试指标
-
-`evaluate_predictions.py` 计算：
-
-- JSON 可解析率
-- facts schema 合法率
-- 样本级规范化 exact match
-- fact 级 micro precision、recall、F1
-- 空 facts 样本准确率
-- evidence 可追溯率
-- 按 type 和 status 的统计
-
-事实列表比较忽略列表顺序，但不会忽略字段内容差异。
-
-## 数据合成
-
-数据合成脚本位于：
-
-```text
-scripts/extractor_synthesis/
-```
-
-详细用法见：
-
-```text
-scripts/extractor_synthesis/README.md
-```
-
-### API 调用示例
-
-DeepSeek / OpenAI-compatible：
-
-```bash
-python scripts/extractor_synthesis/run_extractor_pipeline.py \
-  --api-format openai \
-  --base-url https://api.deepseek.com \
-  --api-key "你的key" \
-  --model deepseek-v4-flash \
-  --run-name MedDG_extractor_test \
-  --max-user-turns 20
-```
-
-Anthropic 官方 Messages API：
-
-```bash
-python scripts/extractor_synthesis/run_extractor_pipeline.py \
-  --api-format anthropic \
-  --base-url https://api.anthropic.com \
-  --api-key "你的key" \
-  --model claude-3-5-sonnet-20241022 \
-  --run-name MedDG_extractor_claude_test \
-  --max-user-turns 20
-```
-
-API key 只通过 `--api-key` 参数传入；主流程日志会自动脱敏。
-
-## Terminology normalization
-
-AskMed supports an optional lightweight terminology layer. Put legally obtained source files under:
-
-```text
-data/terminology/sources/
-```
-
-Build a local SQLite index:
-
-```bash
-python scripts/terminology/import_terminology.py \
-  --icd-file data/terminology/sources/icd10_cn.csv \
-  --loinc-table data/terminology/sources/LoincTable/Loinc.csv \
-  --loinc-zh data/terminology/sources/AccessoryFiles/LinguisticVariants/zhCN5LinguisticVariant.csv \
-  --output data/terminology/terminology.sqlite
-```
-
-Create terminology-derived extractor data without overwriting the original 15k files:
-
-```bash
-python scripts/terminology/normalize_extractor_dataset.py \
-  --input data/synthetic_extractor/MedDG_extractor_15k_validated.jsonl \
-  --terminology-db data/terminology/terminology.sqlite \
-  --output-prefix data/synthetic_extractor/MedDG_extractor_15k_terminology
-```
-
-During live synthesis, pass the same database if you want rolling patient state to use terminology-aware merging:
-
-```bash
-python scripts/extractor_synthesis/run_extractor_pipeline.py \
+python -m scripts.extractor.synthesis.run_extractor_pipeline \
   --api-format openai \
   --base-url https://api.deepseek.com \
   --api-key "your-key" \
   --model deepseek-v4-flash \
-  --run-name terminology_test \
-  --max-user-turns 20 \
+  --source data/MedDG_clean.jsonl \
+  --work-dir data/synthetic_extractor \
+  --run-name extractor_v3 \
+  --max-user-turns 1000 \
+  --workers 3
+```
+
+启用逐轮术语标准化：
+
+```bash
+python -m scripts.extractor.synthesis.run_extractor_pipeline \
+  ... \
   --terminology-db data/terminology/terminology.sqlite
 ```
 
-Training JSON keeps the original fact shape and only changes `normalized_name`; `standard_code` and `terminology` remain `null`. Runtime state can keep `standard_code` and `terminology` internally, while prompt-facing state remains natural-language only.
+传入数据库即启用标准化；不传则关闭。主合成数据保留标准编码，转 Alpaca 时自动保留 `normalized_name` 并清空 `standard_code/terminology`。
+
+失败对话使用同一运行名整对话修复：
+
+```bash
+python -m scripts.extractor.synthesis.run_extractor_pipeline \
+  ... \
+  --run-name extractor_v3 \
+  --repair-failed-dialogues
+```
+
+详细说明见 `scripts/extractor/synthesis/README.md`。
+
+## Terminology
+
+将合法获取的 ICD-10-CN 和 LOINC 文件放在 `data/terminology/sources/`，构建 SQLite：
+
+```bash
+python -m scripts.extractor.terminology.import_terminology \
+  --icd-file data/terminology/sources/ICD-10-CN/disease.csv \
+  --loinc-table data/terminology/sources/LOINC/LoincTable/Loinc.csv \
+  --loinc-zh data/terminology/sources/LOINC/AccessoryFiles/LinguisticVariants/zhCN5LinguisticVariant.csv \
+  --output data/terminology/terminology.sqlite
+```
+
+标准化由 `FactPipeline` 在每个 fact 生成后立即执行；不再需要整批离线标准化脚本。
+
+## Fine-tuning
+
+```bash
+bash scripts/extractor/finetuning/run_extractor.sh check
+bash scripts/extractor/finetuning/run_extractor.sh download
+CUDA_VISIBLE_DEVICES=0 bash scripts/extractor/finetuning/run_extractor.sh train
+CUDA_VISIBLE_DEVICES=0 bash scripts/extractor/finetuning/run_extractor.sh test \
+  --terminology-db data/terminology/terminology.sqlite
+```
+
+配置位于 `configs/extractor/`。默认基座模型为 `Qwen/Qwen3-4B-Instruct-2507`，模板为 `qwen3_nothink`。
+
+## Runtime inference
+
+先启动 LLaMA-Factory OpenAI-compatible API：
+
+```bash
+llamafactory-cli api configs/extractor/extractor_qwen3_4b_api.yaml
+```
+
+另一个终端运行 AskMed 推理处理链：
+
+```bash
+python -m scripts.extractor.inference.run_inference \
+  --base-url http://127.0.0.1:8000/v1 \
+  --api-key EMPTY \
+  --model Qwen3-4B-Instruct-2507 \
+  --terminology-db data/terminology/terminology.sqlite \
+  --input requests.jsonl \
+  --output responses.jsonl
+```
+
+输入每行格式：
+
+```json
+{"dialogue_id":"demo-1","turn_id":0,"previous_doctor_question":null,"patient_utterance":"肚脐周围疼了三天","recent_context":[]}
+```
+
+推理输出先经过 schema/evidence 校验，再可选标准化并更新状态；失败重试一次，仍失败时本轮不更新状态。
+
+## Interviewer
+
+问诊器以 extractor v3.1 的逐轮状态和 MedDG 原对话为基础合成数据，并继承 v3.1 的对话级 train/valid/test 划分：
+
+```bash
+python -m scripts.interviewer.synthesis.run_interviewer_pipeline \
+  --api-format openai \
+  --base-url https://api.deepseek.com \
+  --api-key "your-key" \
+  --model deepseek-chat \
+  --workers 3
+```
+
+微调独立的 Qwen3-4B LoRA：
+
+```bash
+bash scripts/interviewer/finetuning/run_interviewer.sh check
+CUDA_VISIBLE_DEVICES=0 bash scripts/interviewer/finetuning/run_interviewer.sh train
+CUDA_VISIBLE_DEVICES=0 bash scripts/interviewer/finetuning/run_interviewer.sh test
+```
+
+运行时架构：
+
+```mermaid
+flowchart LR
+    P["患者发言"] --> E["Extractor API"]
+    E --> F["FactPipeline"]
+    F --> S["共享 medical_state"]
+    S --> V["精简状态投影"]
+    V --> I["Interviewer API"]
+    A["asked_targets"] --> I
+    I --> Q["下一问或结束"]
+    Q --> P
+```
+
+提取器只更新医学状态，问诊器只更新 `dialogue_control`。双 API 编排方式见 `scripts/interviewer/inference/README.md`。
+
+## Tests
+
+```bash
+python -m unittest discover -s tests -v
+python -m py_compile scripts/extractor/pipeline/*.py
+```

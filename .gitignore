@@ -3,18 +3,17 @@ __pycache__/
 *.log
 .pytest_cache/
 .ruff_cache/
-.ipynb_checkpoints/
-
-.env
-.env.*
-*.key
-*.pem
+.vscode/
+test/
+tests/
 
 models/
 outputs/
-data/
 tool/
-tools/
+
+data/MedDG_clean.jsonl
+data/synthetic_extractor/
+!data/dataset_info.json
 
 data/synthetic_extractor/*_pipeline.log
 data/terminology/sources/

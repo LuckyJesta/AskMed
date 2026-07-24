@@ -1,0 +1,1 @@
+"""Medical fact extractor components."""

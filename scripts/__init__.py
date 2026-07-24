@@ -1,0 +1,1 @@
+"""AskMed script package."""
